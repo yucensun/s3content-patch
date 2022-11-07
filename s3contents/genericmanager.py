@@ -1,7 +1,9 @@
 import datetime
+import gcsfs
 import json
 import mimetypes
 import os
+import s3fs
 
 from dateutil.tz import tzutc
 from fsspec.asyn import sync
@@ -218,40 +220,68 @@ class GenericContentsManager(ContentsManager, HasTraits):
                 self.no_such_entity(path)
             model["format"] = "json"
             prefixed_path = self.fs.path(path)
-            files_s3_detail = sync(
-                self.fs.fs.loop, self.fs.fs._lsdir, prefixed_path
-            )
-            # filter out .s3keep files
-            filtered_files_s3_detail = list(
-                filter(
-                    lambda detail: os.path.basename(detail["Key"])
-                    != self.fs.dir_keep_file,
-                    files_s3_detail,
+
+            if isinstance(self.fs.fs, s3fs.S3FileSystem):
+                # Specific to S3FileSystem
+                files_s3_detail = sync(
+                    self.fs.fs.loop, self.fs.fs._lsdir, prefixed_path
                 )
-            )
-
-            # filter out delete_markers in versioned buckets
-            def is_delete_marker(detail):
-                lstat = self.fs.lstat(detail["Key"])
-                return bool("ST_MTIME" in lstat and lstat["ST_MTIME"])
-
-            filtered_files_s3_detail = list(
-                filter(
-                    lambda detail: is_delete_marker(detail),
-                    filtered_files_s3_detail,
-                )
-            )
-
-            for file_s3_detail in filtered_files_s3_detail:
-                self.log.debug(
-                    f"\n file_s3_detail: {file_s3_detail}"
-                    f"lstat={self.fs.lstat(file_s3_detail['Key'])}"
-                    f"is_delete_marker = {is_delete_marker(file_s3_detail)}"
+                # filter out .s3keep files
+                filtered_files_s3_detail = list(
+                    filter(
+                        lambda detail: os.path.basename(detail["Key"])
+                        != self.fs.dir_keep_file,
+                        files_s3_detail,
+                    )
                 )
 
-            model["content"] = list(
-                map(s3_detail_to_model, filtered_files_s3_detail)
-            )
+                # filter out delete_markers in versioned buckets
+                def is_delete_marker(detail):
+                    lstat = self.fs.lstat(detail["Key"])
+                    return bool("ST_MTIME" in lstat and lstat["ST_MTIME"])
+
+                filtered_files_s3_detail = list(
+                    filter(
+                        lambda detail: is_delete_marker(detail),
+                        filtered_files_s3_detail,
+                    )
+                )
+
+                for file_s3_detail in filtered_files_s3_detail:
+                    self.log.debug(
+                        f"\n file_s3_detail: {file_s3_detail}"
+                        f"lstat={self.fs.lstat(file_s3_detail['Key'])}"
+                        f"is_delete_marker = {is_delete_marker(file_s3_detail)}"
+                    )
+
+                model["content"] = list(
+                    map(s3_detail_to_model, filtered_files_s3_detail)
+                )
+            elif isinstance(self.fs.fs, gcsfs.GCSFileSystem):
+                # Specific to GCSFileSystem
+                files_gcs_detail = sync(
+                    self.fs.fs.loop, self.fs.fs._ls, prefixed_path
+                )
+                # # filter out the current directory
+                filtered_files_gcs_detail = list(
+                    filter(
+                        lambda detail: os.path.basename(detail)
+                        != "",
+                        files_gcs_detail,
+                    )
+                )
+                self.log.debug(f"\n listed files: {filtered_files_gcs_detail}")
+
+                for file_gcs_detail in filtered_files_gcs_detail:
+                    self.log.debug(
+                        f"\n file_gcs_detail: {file_gcs_detail}"
+                        f"\n lstat={self.fs.lstat(file_gcs_detail)}"
+                    )
+
+                converted_files_gcs_detail = self._convert_file_records(filtered_files_gcs_detail)
+                model["content"] = converted_files_gcs_detail
+            else:
+                self.do_error("FS not supported", 500) 
         return model
 
     def _notebook_model_from_path(self, path, content=False, format=None):
@@ -307,6 +337,27 @@ class GenericContentsManager(ContentsManager, HasTraits):
             model["content"] = content
             model["mimetype"] = mimetypes.guess_type(path)[0] or "text/plain"
         return model
+    
+    def _convert_file_records(self, paths):
+        """
+        Applies _notebook_model_from_s3_path or _file_model_from_s3_path to each entry of `paths`,
+        depending on the result of `guess_type`.
+        """
+        ret = []
+        for path in paths:
+            # path = self.fs.remove_prefix(path, self.prefix)  # Remove bucket prefix from paths
+            if os.path.basename(path) == self.fs.dir_keep_file:
+                continue
+            type_ = self.guess_type(path, allow_directory=True)
+            if type_ == "notebook":
+                ret.append(self._notebook_model_from_path(path, False))
+            elif type_ == "file":
+                ret.append(self._file_model_from_path(path, False, None))
+            elif type_ == "directory":
+                ret.append(self._directory_model_from_path(path, False))
+            else:
+                self.do_error("Unknown file type %s for file '%s'" % (type_, path), 500)
+        return ret
 
     def save(self, model, path):
         """Save a file or directory model to path."""
