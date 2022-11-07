@@ -76,8 +76,8 @@ class GCSFS(GenericFS):
     def isdir(self, path):
         # GCSFS doesnt return exists=True for a directory with no files so
         # we need to check if the dir_keep_file exists
-        is_dir = self.isfile(path + self.separator + self.dir_keep_file)
         path_ = self.path(path)
+        is_dir = self.isfile(path_ + self.separator + self.dir_keep_file)
         self.log.debug(
             "S3contents.GCSFS: `%s` is a directory: %s", path_, is_dir
         )
@@ -87,11 +87,14 @@ class GCSFS(GenericFS):
         self.log.debug(
             "S3contents.GCSFS: Move file `%s` to `%s`", old_path, new_path
         )
+        print("In mv: --- old: ", old_path, "new", new_path)
         self.cp(old_path, new_path)
         self.rm(old_path)
 
     def cp(self, old_path, new_path):
+        print("old: ", old_path, "new:", new_path)
         old_path_, new_path_ = self.path(old_path), self.path(new_path)
+        print("OLD: ", old_path_, "NEW:", new_path_)
         self.log.debug(
             "S3contents.GCSFS: Coping `%s` to `%s`", old_path_, new_path_
         )
@@ -99,7 +102,9 @@ class GCSFS(GenericFS):
         if self.isdir(old_path):
             old_dir_path, new_dir_path = old_path, new_path
             for obj in self.ls(old_dir_path):
-                old_item_path = obj
+                old_item_path = self.path(obj)
+                print("old_item_path:", old_item_path)
+                print("old: ", old_dir_path, "new:", new_dir_path)
                 new_item_path = old_item_path.replace(
                     old_dir_path, new_dir_path, 1
                 )
@@ -147,6 +152,7 @@ class GCSFS(GenericFS):
     def lstat(self, path):
         path_ = self.path(path)
         info = self.fs.info(path_)
+        print("GCS lstat info:", info)
         ret = {}
         if "updated" in info:
             ret["ST_MTIME"] = info["updated"]
