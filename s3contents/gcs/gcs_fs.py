@@ -99,7 +99,7 @@ class GCSFS(GenericFS):
         if self.isdir(old_path):
             old_dir_path, new_dir_path = old_path, new_path
             for obj in self.ls(old_dir_path):
-                old_item_path = obj
+                old_item_path = self.path(obj)
                 new_item_path = old_item_path.replace(
                     old_dir_path, new_dir_path, 1
                 )
@@ -145,7 +145,10 @@ class GCSFS(GenericFS):
                     raise HTTPError(400, err, reason="bad format")
 
     def lstat(self, path):
-        path_ = self.path(path)
+        if self.isdir(path):
+            path_ = self.path(path + self.separator + self.dir_keep_file)
+        else:
+            path_ = self.path(path)
         info = self.fs.info(path_)
         ret = {}
         if "updated" in info:

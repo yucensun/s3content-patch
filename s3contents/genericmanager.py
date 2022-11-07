@@ -174,6 +174,9 @@ class GenericContentsManager(ContentsManager, HasTraits):
         )
         return self._file_model_from_path(path, content=content, format=format)
 
+    def _list_contents(self, model, prefixed_path):
+        raise NotImplementedError("Not implemented")
+
     def _directory_model_from_path(self, path, content=False):
         def s3_detail_to_model(s3_detail):
             model_path = s3_detail["Key"]
@@ -218,40 +221,8 @@ class GenericContentsManager(ContentsManager, HasTraits):
                 self.no_such_entity(path)
             model["format"] = "json"
             prefixed_path = self.fs.path(path)
-            files_s3_detail = sync(
-                self.fs.fs.loop, self.fs.fs._lsdir, prefixed_path
-            )
-            # filter out .s3keep files
-            filtered_files_s3_detail = list(
-                filter(
-                    lambda detail: os.path.basename(detail["Key"])
-                    != self.fs.dir_keep_file,
-                    files_s3_detail,
-                )
-            )
+            model = self._list_contents(model, prefixed_path)
 
-            # filter out delete_markers in versioned buckets
-            def is_delete_marker(detail):
-                lstat = self.fs.lstat(detail["Key"])
-                return bool("ST_MTIME" in lstat and lstat["ST_MTIME"])
-
-            filtered_files_s3_detail = list(
-                filter(
-                    lambda detail: is_delete_marker(detail),
-                    filtered_files_s3_detail,
-                )
-            )
-
-            for file_s3_detail in filtered_files_s3_detail:
-                self.log.debug(
-                    f"\n file_s3_detail: {file_s3_detail}"
-                    f"lstat={self.fs.lstat(file_s3_detail['Key'])}"
-                    f"is_delete_marker = {is_delete_marker(file_s3_detail)}"
-                )
-
-            model["content"] = list(
-                map(s3_detail_to_model, filtered_files_s3_detail)
-            )
         return model
 
     def _notebook_model_from_path(self, path, content=False, format=None):

@@ -1,7 +1,9 @@
 import json
 from urllib.parse import urlparse
-
+from fsspec.asyn import sync
+import os
 from traitlets import Any
+
 
 from s3contents.genericmanager import GenericContentsManager, from_dict
 from s3contents.ipycompat import Bool, Unicode
@@ -103,6 +105,45 @@ class S3ContentsManager(GenericContentsManager):
         self.validate_notebook_model(model)
 
         return model.get("message")
+
+    def _list_contents(self, model, prefixed_path):
+        """List the contents in prefixed_path."""
+        files_s3_detail = sync(
+            self.fs.fs.loop, self.fs.fs._lsdir, prefixed_path
+        )
+        # filter out .s3keep files
+        filtered_files_s3_detail = list(
+            filter(
+                lambda detail: os.path.basename(detail["Key"])
+                != self.fs.dir_keep_file,
+                files_s3_detail,
+            )
+        )
+
+        # filter out delete_markers in versioned buckets
+        def is_delete_marker(detail):
+            lstat = self.fs.lstat(detail["Key"])
+            return bool("ST_MTIME" in lstat and lstat["ST_MTIME"])
+
+        filtered_files_s3_detail = list(
+            filter(
+                lambda detail: is_delete_marker(detail),
+                filtered_files_s3_detail,
+            )
+        )
+
+        for file_s3_detail in filtered_files_s3_detail:
+            self.log.debug(
+                f"\n file_s3_detail: {file_s3_detail}"
+                f"lstat={self.fs.lstat(file_s3_detail['Key'])}"
+                f"is_delete_marker = {is_delete_marker(file_s3_detail)}"
+            )
+
+        model["content"] = list(
+            map(s3_detail_to_model, filtered_files_s3_detail)
+        )
+
+        return model
 
 
 def validate_bucket(user_bucket, log):
