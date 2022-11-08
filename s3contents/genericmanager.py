@@ -1,4 +1,5 @@
 import datetime
+import gcsfs
 import json
 import mimetypes
 import os
@@ -213,7 +214,7 @@ class GenericContentsManager(ContentsManager, HasTraits):
                 lstat = self.fs.lstat(dir_keep_file_path)
 
             self.log.debug(
-                f"s3_detail_to_model={s3_detail_to_model}"
+                f"s3_detail_to_model={s3_detail_to_model}" # ?
                 f"dir_s3_detail: path='{path}', lstat={lstat}"
             )
 
@@ -261,35 +262,32 @@ class GenericContentsManager(ContentsManager, HasTraits):
                 model["content"] = list(
                     map(s3_detail_to_model, filtered_files_s3_detail)
                 )
-            else:
-                # Other FileSystems (GCSFileSystem)
-                print("1111111111111111111")
+            elif isinstance(self.fs.fs, gcsfs.GCSFileSystem):
+                # Specific to GCSFileSystem
                 prefixed_path = self.fs.path(path)
-                files_s3_detail = sync(
+                files_gcs_detail = sync(
                     self.fs.fs.loop, self.fs.fs._ls, prefixed_path
                 )
-                print("pre-filter:", files_s3_detail)
-                # print(self.fs.dir_keep_file)
-                # # filter out link to current directory
-                filtered_files_s3_detail = list(
+                # # filter out the current directory
+                filtered_files_gcs_detail = list(
                     filter(
                         lambda detail: os.path.basename(detail)
                         != "",
-                        files_s3_detail,
+                        files_gcs_detail,
                     )
                 )
-                print("post-filter:", filtered_files_s3_detail)
+                self.log.debug(f"\n listed files: {filtered_files_gcs_detail}")
 
-                for file_s3_detail in filtered_files_s3_detail:
+                for file_gcs_detail in filtered_files_gcs_detail:
                     self.log.debug(
-                        f"\n file_s3_detail: {file_s3_detail}"
-                        f"lstat={self.fs.lstat(file_s3_detail)}"
+                        f"\n file_gcs_detail: {file_gcs_detail}"
+                        f"\n lstat={self.fs.lstat(file_gcs_detail)}"
                     )
 
-                converted_files_s3_detail = self._convert_file_records(filtered_files_s3_detail)
-                print(converted_files_s3_detail)
-                model["content"] = converted_files_s3_detail
-                print("2222222222222222222")
+                converted_files_gcs_detail = self._convert_file_records(filtered_files_gcs_detail)
+                model["content"] = converted_files_gcs_detail
+            else:
+                self.do_error("FS not supported", 500) 
         return model
 
     def _notebook_model_from_path(self, path, content=False, format=None):
