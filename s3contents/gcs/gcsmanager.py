@@ -1,3 +1,6 @@
+from fsspec.asyn import sync
+import os
+
 from s3contents.gcs.gcs_fs import GCSFS
 from s3contents.genericmanager import GenericContentsManager
 from s3contents.ipycompat import Unicode
@@ -35,3 +38,50 @@ class GCSContentsManager(GenericContentsManager):
             prefix=self.prefix,
             separator=self.separator,
         )
+        
+    def _convert_file_records(self, paths):
+        """
+        Applies _notebook_model_from_s3_path or _file_model_from_s3_path to each entry of `paths`,
+        depending on the result of `guess_type`.
+        """
+        ret = []
+        for path in paths:
+            # path = self.fs.remove_prefix(path, self.prefix)  # Remove bucket prefix from paths
+            if os.path.basename(path) == self.fs.dir_keep_file:
+                continue
+            type_ = self.guess_type(path, allow_directory=True)
+            if type_ == "notebook":
+                ret.append(self._notebook_model_from_path(path, False))
+            elif type_ == "file":
+                ret.append(self._file_model_from_path(path, False, None))
+            elif type_ == "directory":
+                ret.append(self._directory_model_from_path(path, False))
+            else:
+                self.do_error("Unknown file type %s for file '%s'" % (type_, path), 500)
+        return ret
+
+    def _list_contents(self, model, prefixed_path):
+        # Specific to GCSFileSystem
+        files_gcs_detail = sync(
+            self.fs.fs.loop, self.fs.fs._ls, prefixed_path
+        )
+        # # filter out the current directory
+        filtered_files_gcs_detail = list(
+            filter(
+                lambda detail: os.path.basename(detail)
+                != "",
+                files_gcs_detail,
+            )
+        )
+        self.log.debug(f"\n listed files: {filtered_files_gcs_detail}")
+
+        for file_gcs_detail in filtered_files_gcs_detail:
+            self.log.debug(
+                f"\n file_gcs_detail: {file_gcs_detail}"
+                f"\n lstat={self.fs.lstat(file_gcs_detail)}"
+            )
+
+        converted_files_gcs_detail = self._convert_file_records(filtered_files_gcs_detail)
+        model["content"] = converted_files_gcs_detail
+        return model
+    
